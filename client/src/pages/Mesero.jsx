@@ -64,7 +64,7 @@ export default function Mesero() {
       });
       setMesaSel({ id, numero });
       setPreId(r.precuenta_id || null);
-      await cargar(r.precuenta_id || null, id); // carga con fallback
+      await cargar(r.precuenta_id || null, id);
       api('/api/mesas').then(setMesas);
     } catch (e) {
       setMsg(e.message || 'No se pudo tomar la mesa.');
@@ -82,9 +82,7 @@ export default function Mesero() {
         setPreId(r.precuenta_id);
         return r.precuenta_id;
       }
-    } catch {
-      /* silent */
-    }
+    } catch { /* silent */ }
     return null;
   }
 
@@ -96,7 +94,6 @@ export default function Mesero() {
       const d = await api(`/api/precuentas/${pid}`);
       setDetalle(d);
     } catch (e) {
-      // si fue 404, re-resuelve el id y reintenta una vez
       if (String(e?.message || '').startsWith('Not Found')) {
         try {
           const pid2 = await ensurePreId(null, mesaSel?.id);
@@ -151,33 +148,45 @@ export default function Mesero() {
     setShowAcomps(false);
   }
 
-  // Agrupa líneas
+  // === Agrupar líneas: producto + set de acomp (ids numéricos, únicos y ordenados) ===
   const lineasAgrupadas = useMemo(() => {
-    const out = [];
     const map = new Map();
-    (detalle.detalle || []).forEach((li) => {
-      const acompIds = (li.acomps || []).map((a) => a.id).sort((a, b) => a - b);
-      const firma = `${li.producto_id}#${acompIds.join(',')}`;
+
+    for (const li of (detalle.detalle || [])) {
+      const pid = Number(li.producto_id);
+
+      const acompIds = Array.isArray(li.acomps)
+        ? Array.from(new Set(
+            li.acomps.map(a => Number(a.id)).filter(n => Number.isFinite(n))
+          )).sort((a,b)=>a-b)
+        : [];
+
+      // firma estable (igual a Cajero)
+      const firma = JSON.stringify({ pid, a: acompIds });
+
       if (!map.has(firma)) {
         map.set(firma, {
           firma,
-          producto_id: li.producto_id,
+          producto_id: pid,
           nombre: li.nombre_producto || li.descripcion,
           precio: Number(li.precio_unitario || 0),
           acomps: (li.acomps || []).map(a => ({
-            id: a.id, nombre: a.nombre, precio_extra: Number(a.precio_extra || 0)
+            id: Number(a.id),
+            nombre: a.nombre,
+            precio_extra: Number(a.precio_extra || 0),
           })),
           cantidad: 0,
           itemIds: [],
         });
       }
+
       const g = map.get(firma);
       g.cantidad += Number(li.cantidad || 1);
       g.itemIds.push(li.item_id);
-    });
-    map.forEach((v) => out.push(v));
-    out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-    return out;
+    }
+
+    return Array.from(map.values())
+      .sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
   }, [detalle]);
 
   // +/- / eliminar (siempre asegurando preId)
@@ -247,7 +256,6 @@ export default function Mesero() {
       setMesaSel(null); setPreId(null); setDetalle({ header: {}, detalle: [] });
       api('/api/mesas').then(setMesas);
     } catch (e) {
-      // reintento único resolviendo id actual
       try {
         const pid2 = await ensurePreId(null, mesaSel?.id);
         if (pid2) {

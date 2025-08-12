@@ -53,7 +53,9 @@ async function recalcPrecuenta(preId) {
   return { subtotal, p, propina, total: subtotal + propina };
 }
 
-/** HTML optimizado: títulos grandes; productos/extras al tamaño anterior */
+/** HTML optimizado: títulos grandes; productos/extras al tamaño anterior
+ *  + AGRUPACIÓN por (producto_id + set ordenado de acompañamientos) para imprimir igual que en la UI.
+ */
 async function htmlPrecuenta(preId) {
   const { rows: Hrows } = await pool.query(
     `SELECT p.id, p.numero, p.mesa_id, p.mesero_id, p.estado,
@@ -87,18 +89,49 @@ async function htmlPrecuenta(preId) {
       ORDER BY pr.nombre`, [preId]
   );
 
-  const lineas = drows.map(li => {
+  // === AGRUPACIÓN igual a la UI (producto + set de acomp normalizado) ===
+  const map = new Map();
+  for (const li of drows) {
     const acomp = Array.isArray(li.acomp) ? li.acomp : JSON.parse(li.acomp || '[]');
-    const acompHTML = acomp.map(a => `
+    const pid = Number(li.producto_id);
+
+    const acompIds = Array.from(new Set(
+      acomp.map(a => Number(a.id)).filter(n => Number.isFinite(n))
+    )).sort((a,b)=>a-b);
+
+    const firma = JSON.stringify({ pid, a: acompIds });
+
+    if (!map.has(firma)) {
+      map.set(firma, {
+        producto_id: pid,
+        nombre: li.producto_nombre,
+        precio: Number(li.precio_unitario || 0),
+        cantidad: 0,
+        acomp: acomp.map(a => ({
+          id: Number(a.id),
+          nombre: a.nombre,
+          precio_extra: Number(a.precio_extra || 0),
+        })),
+      });
+    }
+    const g = map.get(firma);
+    g.cantidad += Number(li.cantidad || 1);
+  }
+
+  const grupos = Array.from(map.values())
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+
+  const lineas = grupos.map(g => {
+    const acompHTML = (g.acomp || []).map(a => `
       <div class="row sub">
-        <div class="name">${li.cantidad} x ${a.nombre}</div>
-        <div class="price">$${moneyCL(Number(a.precio_extra) * Number(li.cantidad||1))}</div>
+        <div class="name">${g.cantidad} x ${a.nombre}</div>
+        <div class="price">$${moneyCL(Number(a.precio_extra) * Number(g.cantidad||1))}</div>
       </div>
     `).join('');
     return `
       <div class="row item">
-        <div class="name"><strong class="up">${li.cantidad} x ${li.producto_nombre}</strong></div>
-        <div class="price big">$${moneyCL(Number(li.precio_unitario) * Number(li.cantidad||1))}</div>
+        <div class="name"><strong class="up">${g.cantidad} x ${g.nombre}</strong></div>
+        <div class="price big">$${moneyCL(Number(g.precio) * Number(g.cantidad||1))}</div>
       </div>
       ${acompHTML}
     `;
@@ -315,8 +348,8 @@ router.post('/:preId/items/:itemId/acompanamientos', async (req, res) => {
   }
 });
 
-// Propina
-router.post('/:id/propina', async (req, res) => {
+// Propina (acepta PATCH y POST)
+async function setPropina(req, res) {
   const { id } = req.params;
   const { porcentaje } = req.body || {};
   const p = Number(porcentaje);
@@ -330,7 +363,9 @@ router.post('/:id/propina', async (req, res) => {
     console.error(e);
     res.status(500).json({ error: 'No se pudo actualizar la propina' });
   }
-});
+}
+router.patch('/:id/propina', setPropina);
+router.post('/:id/propina', setPropina);
 
 // Anular
 router.post('/:id/anular', async (req, res) => {
@@ -348,10 +383,13 @@ router.post('/:id/anular', async (req, res) => {
   }
 });
 
-// Imprimir (directo) con escala ↑ para mejor definición
+// Imprimir (directo o HTML). direct:true en body o ?direct=1
 router.post('/:id/imprimir-precuenta', async (req, res) => {
   const { id } = req.params;
-  const direct = !!req.body?.direct;
+  const direct =
+    !!req.body?.direct ||
+    req.query.direct === '1' ||
+    String(req.query.direct || '').toLowerCase() === 'true';
 
   if (isLocked(id)) {
     return res.status(202).json({ ok:true, dedup:true, message:'Ya se está imprimiendo' });
@@ -371,7 +409,6 @@ router.post('/:id/imprimir-precuenta', async (req, res) => {
     const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
     const page = await browser.newPage();
 
-    // Mayor densidad y media print
     await page.setViewport({ width: 800, height: 1200, deviceScaleFactor: 2 });
     await page.emulateMediaType('print');
 

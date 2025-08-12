@@ -166,7 +166,7 @@ export default function Cajero() {
       }
 
       // SIEMPRE intentar imprimir
-      await api(`/api/precuentas/${preId}/imprimir-precuenta`, { method: 'POST' });
+      await api(`/api/precuentas/${preId}/imprimir-precuenta?direct=1`, { method: 'POST' });
       setMsg('Precuenta reimpresa con los cambios.');
     } catch (e) {
       setMsg(e.message || 'Error al reimprimir precuenta.');
