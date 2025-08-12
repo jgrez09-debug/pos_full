@@ -1,4 +1,3 @@
-// client/src/pages/Cajero.jsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../utils/api';
 import '/src/styles.css';
@@ -19,6 +18,7 @@ export default function Cajero() {
   const [propinaPct, setPropinaPct] = useState(10);
 
   const [msg, setMsg] = useState('');
+  const [pagando, setPagando] = useState(false); // ← evita doble click
   const pollingRef = useRef(null);
 
   // === Polling de mesas (cada 2s)
@@ -73,7 +73,8 @@ export default function Cajero() {
   }
 
   async function pagar(tipo) {
-    if (!preId) return;
+    if (!preId || pagando) return;
+    setPagando(true);
     try {
       const body = {
         cajero_id: user.id,
@@ -82,7 +83,18 @@ export default function Cajero() {
         monto_tarjeta: Number(tarjeta || 0),
       };
       await api(`/api/pagos/${preId}`, { method: 'POST', body });
-      setMsg('Pago registrado.');
+
+      // Emitir comandas SOLO una vez (mientras "pagando" está true, los botones quedan deshabilitados)
+      try {
+        await api('/api/comandas/emitir', {
+          method: 'POST',
+          body: { precuenta_id: preId }
+        });
+        setMsg('Pago registrado y comandas enviadas.');
+      } catch (e) {
+        setMsg(`Pago registrado. (No se pudo enviar comandas)`);
+      }
+
       // limpiar UI y refrescar mesas
       setMesaSel(null);
       setPreId(null);
@@ -91,70 +103,54 @@ export default function Cajero() {
       setMesas(data);
     } catch (e) {
       setMsg(e.message || 'Error al cobrar.');
+    } finally {
+      setPagando(false);
     }
   }
 
   // ====== Controles de líneas (igual que Mesero) ======
-  // Agrupar lineas por producto + set de acompañamientos
   const lineasAgrupadas = useMemo(() => {
-    const out = [];
-    const map = new Map();
+  const map = new Map();
 
-    (detalle.detalle || []).forEach((li) => {
-      const acompIds = (li.acomps || []).map(a => a.id).sort((a,b)=>a-b);
-      const firma = `${li.producto_id}#${acompIds.join(',')}`;
+  for (const li of (detalle.detalle || [])) {
+    const pid = Number(li.producto_id);
 
-      if (!map.has(firma)) {
-        map.set(firma, {
-          firma,
-          producto_id: li.producto_id,
-          nombre: li.nombre_producto || li.descripcion,
-          precio: Number(li.precio_unitario || 0),
-          acomps: (li.acomps || []).map(a => ({
-            id: a.id,
-            nombre: a.nombre,
-            precio_extra: Number(a.precio_extra || 0),
-          })),
-          cantidad: 0,
-          itemIds: [],
-        });
-      }
-      const g = map.get(firma);
-      g.cantidad += Number(li.cantidad || 1);
-      g.itemIds.push(li.item_id);
-    });
+    // Normalizar acomp: números, sin null/NaN, únicos y ordenados
+    const acompIds = Array.isArray(li.acomps)
+      ? Array.from(new Set(
+          li.acomps.map(a => Number(a.id)).filter(n => Number.isFinite(n))
+        )).sort((a,b)=>a-b)
+      : [];
 
-    map.forEach(v => out.push(v));
-    out.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
-    return out;
-  }, [detalle]);
+    // Firma estable: producto + set de acomp ordenado
+    const firma = JSON.stringify({ pid, a: acompIds });
 
-  async function incLinea(g) {
-    const idItem = g.itemIds[0];
-    await api(`/api/precuentas/${preId}/items/${idItem}`, {
-      method: 'PATCH',
-      body: { op: 'inc' },
-    });
-    await cargar(preId);
-  }
-
-  async function decLinea(g) {
-    const idItem = g.itemIds[0];
-    await api(`/api/precuentas/${preId}/items/${idItem}`, {
-      method: 'PATCH',
-      body: { op: 'dec' },
-    });
-    await cargar(preId);
-  }
-
-  async function delLinea(g) {
-    for (const idItem of g.itemIds) {
-      await api(`/api/precuentas/${preId}/items/${idItem}`, { method: 'DELETE' });
+    if (!map.has(firma)) {
+      map.set(firma, {
+        firma,
+        producto_id: pid,
+        nombre: li.nombre_producto || li.descripcion,
+        precio: Number(li.precio_unitario || 0),
+        acomps: (li.acomps || []).map(a => ({
+          id: Number(a.id),
+          nombre: a.nombre,
+          precio_extra: Number(a.precio_extra || 0),
+        })),
+        cantidad: 0,
+        itemIds: [],
+      });
     }
-    await cargar(preId);
+
+    const g = map.get(firma);
+    g.cantidad += Number(li.cantidad || 1);
+    g.itemIds.push(li.item_id);
   }
 
-  // Reimprimir precuenta (solo si hay productos)
+  return Array.from(map.values())
+    .sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
+}, [detalle]);
+
+  // Reimprimir precuenta
   async function reimprimirPrecuenta() {
     if (!preId) return;
     const hayProductos = (detalle?.detalle?.length || 0) > 0;
@@ -206,36 +202,34 @@ export default function Cajero() {
                 Mesa {mesaSel?.numero} · Pre #{String(detalle.header?.numero ?? '').padStart(3,'0')}
               </div>
               <div className="row" style={{gap:8}}>
-                <button className="btn-link" onClick={reimprimirPrecuenta} disabled={!hayProductos}>
+                <button className="btn-link" onClick={reimprimirPrecuenta} disabled={!hayProductos || pagando}>
                   Reimprimir
                 </button>
                 <button
                   className="btn-link"
-                  onClick={() => { setMesaSel(null); setPreId(null); setDetalle({header:{}, detalle:[]}); }}
+                  onClick={() => { if (!pagando){ setMesaSel(null); setPreId(null); setDetalle({header:{}, detalle:[]}); } }}
                 >
                   Cerrar
                 </button>
               </div>
             </div>
 
-            {/* === Ticket con mismo formato que Mesero === */}
+            {/* Ticket */}
             <ul className="list">
               {lineasAgrupadas.map((g) => (
                 <li key={g.firma} className="linea-prod">
-                  {/* Línea principal del producto */}
                   <div className="row space gap-8">
                     <div className="flex1">
                       <strong>{g.cantidad} x {g.nombre}</strong>
                     </div>
                     <div className="linea-precio-botones">
                       <div className="linea-precio">{money(g.precio * g.cantidad)}</div>
-                      <button className="btn-ghost" onClick={() => decLinea(g)} aria-label="disminuir">–</button>
-                      <button className="btn-ghost" onClick={() => incLinea(g)} aria-label="aumentar">+</button>
-                      <button className="btn-link" onClick={() => delLinea(g)} aria-label="eliminar">🗑</button>
+                      <button className="btn-ghost" onClick={() => decLinea(g)} aria-label="disminuir" disabled={pagando}>–</button>
+                      <button className="btn-ghost" onClick={() => incLinea(g)} aria-label="aumentar" disabled={pagando}>+</button>
+                      <button className="btn-link" onClick={() => delLinea(g)} aria-label="eliminar" disabled={pagando}>🗑</button>
                     </div>
                   </div>
 
-                  {/* Líneas de acompañamientos con sangría */}
                   {Array.isArray(g.acomps) && g.acomps.length > 0 && (
                     <ul className="lista-acomps">
                       {g.acomps.map((a) => (
@@ -266,8 +260,9 @@ export default function Cajero() {
                   step="0.5"
                   value={propinaPct}
                   onChange={(e)=>setPropinaPct(e.target.value)}
+                  disabled={pagando}
                 />
-                <button className="btn-ghost" onClick={actualizarPropina}>Actualizar</button>
+                <button className="btn-ghost" onClick={actualizarPropina} disabled={pagando}>Actualizar</button>
               </div>
             </div>
 
@@ -292,6 +287,7 @@ export default function Cajero() {
                 inputMode="numeric"
                 value={efectivo}
                 onChange={(e)=>setEfectivo(e.target.value.replace(/\D/g,''))}
+                disabled={pagando}
               />
               <input
                 className="input"
@@ -299,16 +295,22 @@ export default function Cajero() {
                 inputMode="numeric"
                 value={tarjeta}
                 onChange={(e)=>setTarjeta(e.target.value.replace(/\D/g,''))}
+                disabled={pagando}
               />
             </div>
             <div className="row" style={{ marginTop: 8, justifyContent:'space-between' }}>
-              <button className="btn-primary" onClick={()=>{ setTarjeta('0'); setEfectivo(String(total)); pagar('efectivo'); }}>
-                Pagar Efectivo
+              <button className="btn-primary" disabled={pagando || !hayProductos}
+                onClick={()=>{ setTarjeta('0'); setEfectivo(String(total)); pagar('efectivo'); }}>
+                {pagando ? 'Procesando…' : 'Pagar Efectivo'}
               </button>
-              <button className="btn-primary" onClick={()=>{ setEfectivo('0'); setTarjeta(String(total)); pagar('tarjeta'); }}>
-                Pagar Tarjeta
+              <button className="btn-primary" disabled={pagando || !hayProductos}
+                onClick={()=>{ setEfectivo('0'); setTarjeta(String(total)); pagar('tarjeta'); }}>
+                {pagando ? 'Procesando…' : 'Pagar Tarjeta'}
               </button>
-              <button className="btn-ghost" onClick={()=>pagar('mixto')}>Pagar Mixto</button>
+              <button className="btn-ghost" disabled={pagando || !hayProductos}
+                onClick={()=>pagar('mixto')}>
+                {pagando ? 'Procesando…' : 'Pagar Mixto'}
+              </button>
             </div>
           </section>
         </>
