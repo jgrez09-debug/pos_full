@@ -18,16 +18,14 @@ export default function Cajero() {
   const [propinaPct, setPropinaPct] = useState(10);
 
   const [msg, setMsg] = useState('');
-  const [pagando, setPagando] = useState(false); // ← evita doble click
+  const [pagando, setPagando] = useState(false);
+  const [anulando, setAnulando] = useState(false);
+  const [reimprimiendo, setReimprimiendo] = useState(false);
   const pollingRef = useRef(null);
 
-  // === Polling de mesas (cada 2s)
   useEffect(() => {
     const load = async () => {
-      try {
-        const data = await api('/api/mesas');
-        setMesas(data);
-      } catch { /* ignore */ }
+      try { setMesas(await api('/api/mesas')); } catch {}
     };
     load();
     pollingRef.current = setInterval(load, 2000);
@@ -39,16 +37,12 @@ export default function Cajero() {
     [mesas]
   );
 
-  // Cargar precuenta de una mesa ocupada
   async function abrirMesa(m) {
     setMsg('');
     setMesaSel({ id: m.id, numero: m.numero });
-
     const r = await api(`/api/mesas/${m.id}/precuenta`);
     if (!r?.precuenta_id) {
-      setPreId(null);
-      setDetalle({ header:{}, detalle:[] });
-      return;
+      setPreId(null); setDetalle({ header:{}, detalle:[] }); return;
     }
     setPreId(r.precuenta_id);
     await cargar(r.precuenta_id);
@@ -65,15 +59,19 @@ export default function Cajero() {
 
   async function actualizarPropina() {
     if (!preId) return;
-    await api(`/api/precuentas/${preId}/propina`, {
-      method: 'PATCH',
-      body: { porcentaje: Number(propinaPct) }
-    });
-    await cargar(preId);
+    try {
+      await api(`/api/precuentas/${preId}/propina`, {
+        method: 'PATCH',
+        body: { porcentaje: Number(propinaPct) }
+      });
+      await cargar(preId);
+    } catch (e) {
+      setMsg(e.message || 'No se pudo actualizar propina.');
+    }
   }
 
   async function pagar(tipo) {
-    if (!preId || pagando) return;
+    if (!preId || pagando || anulando || reimprimiendo) return;
     setPagando(true);
     try {
       const body = {
@@ -84,91 +82,102 @@ export default function Cajero() {
       };
       await api(`/api/pagos/${preId}`, { method: 'POST', body });
 
-      // Emitir comandas SOLO una vez (mientras "pagando" está true, los botones quedan deshabilitados)
       try {
-        await api('/api/comandas/emitir', {
-          method: 'POST',
-          body: { precuenta_id: preId }
-        });
+        await api('/api/comandas/emitir', { method: 'POST', body: { precuenta_id: preId } });
         setMsg('Pago registrado y comandas enviadas.');
-      } catch (e) {
-        setMsg(`Pago registrado. (No se pudo enviar comandas)`);
+      } catch {
+        setMsg('Pago registrado. (No se pudo enviar comandas)');
       }
 
-      // limpiar UI y refrescar mesas
-      setMesaSel(null);
-      setPreId(null);
-      setDetalle({ header:{}, detalle:[] });
-      const data = await api('/api/mesas');
-      setMesas(data);
+      setMesaSel(null); setPreId(null); setDetalle({ header:{}, detalle:[] });
+      setMesas(await api('/api/mesas'));
     } catch (e) {
       setMsg(e.message || 'Error al cobrar.');
-    } finally {
-      setPagando(false);
-    }
+    } finally { setPagando(false); }
   }
 
-  // ====== Controles de líneas (igual que Mesero) ======
+  async function anularPrecuenta() {
+    if (!preId || pagando || anulando || reimprimiendo) return;
+    setAnulando(true);
+    try {
+      await api(`/api/precuentas/${preId}/anular`, { method: 'POST' });
+      setMsg('Precuenta anulada y mesa liberada.');
+      setMesaSel(null); setPreId(null); setDetalle({ header:{}, detalle:[] });
+      setMesas(await api('/api/mesas'));
+    } catch (e) {
+      setMsg(e.message || 'No se pudo anular la precuenta.');
+    } finally { setAnulando(false); }
+  }
+
   const lineasAgrupadas = useMemo(() => {
-  const map = new Map();
-
-  for (const li of (detalle.detalle || [])) {
-    const pid = Number(li.producto_id);
-
-    // Normalizar acomp: números, sin null/NaN, únicos y ordenados
-    const acompIds = Array.isArray(li.acomps)
-      ? Array.from(new Set(
-          li.acomps.map(a => Number(a.id)).filter(n => Number.isFinite(n))
-        )).sort((a,b)=>a-b)
-      : [];
-
-    // Firma estable: producto + set de acomp ordenado
-    const firma = JSON.stringify({ pid, a: acompIds });
-
-    if (!map.has(firma)) {
-      map.set(firma, {
-        firma,
-        producto_id: pid,
-        nombre: li.nombre_producto || li.descripcion,
-        precio: Number(li.precio_unitario || 0),
-        acomps: (li.acomps || []).map(a => ({
-          id: Number(a.id),
-          nombre: a.nombre,
-          precio_extra: Number(a.precio_extra || 0),
-        })),
-        cantidad: 0,
-        itemIds: [],
-      });
+    const map = new Map();
+    for (const li of (detalle.detalle || [])) {
+      const pid = Number(li.producto_id);
+      const acompIds = Array.isArray(li.acomps)
+        ? Array.from(new Set(li.acomps.map(a => Number(a.id)).filter(Number.isFinite))).sort((a,b)=>a-b)
+        : [];
+      const firma = JSON.stringify({ pid, a: acompIds });
+      if (!map.has(firma)) {
+        map.set(firma, {
+          firma,
+          producto_id: pid,
+          nombre: li.nombre_producto || li.descripcion,
+          precio: Number(li.precio_unitario || 0),
+          acomps: (li.acomps || []).map(a => ({
+            id: Number(a.id),
+            nombre: a.nombre,
+            precio_extra: Number(a.precio_extra || 0),
+          })),
+          cantidad: 0,
+          itemIds: [],
+        });
+      }
+      const g = map.get(firma);
+      g.cantidad += Number(li.cantidad || 1);
+      g.itemIds.push(li.item_id);
     }
+    return Array.from(map.values()).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+  }, [detalle]);
 
-    const g = map.get(firma);
-    g.cantidad += Number(li.cantidad || 1);
-    g.itemIds.push(li.item_id);
-  }
-
-  return Array.from(map.values())
-    .sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
-}, [detalle]);
-
-  // Reimprimir precuenta
+  // ===== Reimprimir: guarda propina si cambió, pero IMPRIME aunque falle =====
   async function reimprimirPrecuenta() {
-    if (!preId) return;
-    const hayProductos = (detalle?.detalle?.length || 0) > 0;
-    if (!hayProductos) {
+    if (!preId || reimprimiendo || pagando || anulando) return;
+    if ((detalle?.detalle?.length || 0) === 0) {
       setMsg('No puedes reimprimir una precuenta vacía.');
       return;
     }
+    setReimprimiendo(true);
+    setMsg('');
     try {
+      const pctServer = Number(detalle.header?.propina_porcentaje ?? 10);
+      const pctLocal  = Number(propinaPct);
+
+      if (pctLocal !== pctServer) {
+        try {
+          await api(`/api/precuentas/${preId}/propina`, {
+            method: 'PATCH',
+            body: { porcentaje: pctLocal }
+          });
+          await cargar(preId);
+        } catch (e) {
+          // No frenamos la impresión por esto
+          console.warn('No se pudo actualizar propina antes de imprimir:', e);
+        }
+      }
+
+      // SIEMPRE intentar imprimir
       await api(`/api/precuentas/${preId}/imprimir-precuenta`, { method: 'POST' });
       setMsg('Precuenta reimpresa con los cambios.');
-      await cargar(preId);
     } catch (e) {
       setMsg(e.message || 'Error al reimprimir precuenta.');
+    } finally {
+      setReimprimiendo(false);
     }
   }
 
   const total = Number(detalle.header?.total_con_propina ?? 0);
   const hayProductos = (detalle?.detalle?.length || 0) > 0;
+  const busy = pagando || anulando || reimprimiendo;
 
   return (
     <div className="m-root">
@@ -177,7 +186,6 @@ export default function Cajero() {
         <div className="m-sub">Hola, {user?.nombre_completo || '—'}</div>
       </header>
 
-      {/* Mesas ocupadas en tiempo real */}
       <section className="card">
         <div className="card-title row space">
           <span>Mesas ocupadas</span>
@@ -193,7 +201,6 @@ export default function Cajero() {
         </div>
       </section>
 
-      {/* Precuenta seleccionada */}
       {preId && (
         <>
           <section className="card">
@@ -202,31 +209,41 @@ export default function Cajero() {
                 Mesa {mesaSel?.numero} · Pre #{String(detalle.header?.numero ?? '').padStart(3,'0')}
               </div>
               <div className="row" style={{gap:8}}>
-                <button className="btn-link" onClick={reimprimirPrecuenta} disabled={!hayProductos || pagando}>
-                  Reimprimir
+                <button className="btn-link" onClick={reimprimirPrecuenta} disabled={!hayProductos || busy}>
+                  {reimprimiendo ? 'Reimprimiendo…' : 'Reimprimir'}
                 </button>
-                <button
-                  className="btn-link"
-                  onClick={() => { if (!pagando){ setMesaSel(null); setPreId(null); setDetalle({header:{}, detalle:[]}); } }}
-                >
+                <button className="btn-link" onClick={anularPrecuenta} disabled={busy}>
+                  {anulando ? 'Anulando…' : 'Anular'}
+                </button>
+                <button className="btn-link" onClick={() => { if (!busy){ setMesaSel(null); setPreId(null); setDetalle({header:{}, detalle:[]}); } }}>
                   Cerrar
                 </button>
               </div>
             </div>
 
-            {/* Ticket */}
             <ul className="list">
               {lineasAgrupadas.map((g) => (
                 <li key={g.firma} className="linea-prod">
                   <div className="row space gap-8">
-                    <div className="flex1">
-                      <strong>{g.cantidad} x {g.nombre}</strong>
-                    </div>
+                    <div className="flex1"><strong>{g.cantidad} x {g.nombre}</strong></div>
                     <div className="linea-precio-botones">
                       <div className="linea-precio">{money(g.precio * g.cantidad)}</div>
-                      <button className="btn-ghost" onClick={() => decLinea(g)} aria-label="disminuir" disabled={pagando}>–</button>
-                      <button className="btn-ghost" onClick={() => incLinea(g)} aria-label="aumentar" disabled={pagando}>+</button>
-                      <button className="btn-link" onClick={() => delLinea(g)} aria-label="eliminar" disabled={pagando}>🗑</button>
+                      <button className="btn-ghost" disabled={busy} onClick={()=>{
+                        const idItem = g.itemIds[0];
+                        api(`/api/precuentas/${preId}/items/${idItem}`, { method:'PATCH', body:{op:'dec'} })
+                          .then(()=>cargar(preId));
+                      }}>–</button>
+                      <button className="btn-ghost" disabled={busy} onClick={()=>{
+                        const idItem = g.itemIds[0];
+                        api(`/api/precuentas/${preId}/items/${idItem}`, { method:'PATCH', body:{op:'inc'} })
+                          .then(()=>cargar(preId));
+                      }}>+</button>
+                      <button className="btn-link" disabled={busy} onClick={async ()=>{
+                        for (const idItem of g.itemIds) {
+                          await api(`/api/precuentas/${preId}/items/${idItem}`, { method:'DELETE' });
+                        }
+                        await cargar(preId);
+                      }}>🗑</button>
                     </div>
                   </div>
 
@@ -244,7 +261,6 @@ export default function Cajero() {
               ))}
             </ul>
 
-            {/* Totales y propina */}
             <div className="row">
               <span className="muted">Subtotal</span>
               <span>{money(detalle.header?.total_sin_propina ?? 0)}</span>
@@ -260,9 +276,9 @@ export default function Cajero() {
                   step="0.5"
                   value={propinaPct}
                   onChange={(e)=>setPropinaPct(e.target.value)}
-                  disabled={pagando}
+                  disabled={busy}
                 />
-                <button className="btn-ghost" onClick={actualizarPropina} disabled={pagando}>Actualizar</button>
+                <button className="btn-ghost" onClick={actualizarPropina} disabled={busy}>Actualizar</button>
               </div>
             </div>
 
@@ -277,37 +293,24 @@ export default function Cajero() {
             </div>
           </section>
 
-          {/* Pago */}
           <section className="card">
             <div className="card-title">Pago</div>
             <div className="row">
-              <input
-                className="input"
-                placeholder="Efectivo"
-                inputMode="numeric"
-                value={efectivo}
-                onChange={(e)=>setEfectivo(e.target.value.replace(/\D/g,''))}
-                disabled={pagando}
-              />
-              <input
-                className="input"
-                placeholder="Tarjeta"
-                inputMode="numeric"
-                value={tarjeta}
-                onChange={(e)=>setTarjeta(e.target.value.replace(/\D/g,''))}
-                disabled={pagando}
-              />
+              <input className="input" placeholder="Efectivo" inputMode="numeric"
+                value={efectivo} onChange={(e)=>setEfectivo(e.target.value.replace(/\D/g,''))} disabled={busy} />
+              <input className="input" placeholder="Tarjeta" inputMode="numeric"
+                value={tarjeta} onChange={(e)=>setTarjeta(e.target.value.replace(/\D/g,''))} disabled={busy} />
             </div>
             <div className="row" style={{ marginTop: 8, justifyContent:'space-between' }}>
-              <button className="btn-primary" disabled={pagando || !hayProductos}
+              <button className="btn-primary" disabled={busy || !hayProductos}
                 onClick={()=>{ setTarjeta('0'); setEfectivo(String(total)); pagar('efectivo'); }}>
                 {pagando ? 'Procesando…' : 'Pagar Efectivo'}
               </button>
-              <button className="btn-primary" disabled={pagando || !hayProductos}
+              <button className="btn-primary" disabled={busy || !hayProductos}
                 onClick={()=>{ setEfectivo('0'); setTarjeta(String(total)); pagar('tarjeta'); }}>
                 {pagando ? 'Procesando…' : 'Pagar Tarjeta'}
               </button>
-              <button className="btn-ghost" disabled={pagando || !hayProductos}
+              <button className="btn-ghost" disabled={busy || !hayProductos}
                 onClick={()=>pagar('mixto')}>
                 {pagando ? 'Procesando…' : 'Pagar Mixto'}
               </button>
