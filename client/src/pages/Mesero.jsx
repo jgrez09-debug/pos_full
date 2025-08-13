@@ -22,11 +22,12 @@ export default function Mesero() {
   const [categoria, setCategoria] = useState('Todas');
   const [msg, setMsg] = useState('');
 
-  // modal acomp
+  // modal acomp + nota
   const [showAcomps, setShowAcomps] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [acomps, setAcomps] = useState([]);
   const [selectedAcomps, setSelectedAcomps] = useState([]);
+  const [noteText, setNoteText] = useState(''); // ← nota para cocina/barra
 
   // impresión: anti-doble click
   const [printing, setPrinting] = useState(false);
@@ -64,7 +65,7 @@ export default function Mesero() {
       });
       setMesaSel({ id, numero });
       setPreId(r.precuenta_id || null);
-      await cargar(r.precuenta_id || null, id);
+      await cargar(r.precuenta_id || null, id); // carga con fallback
       api('/api/mesas').then(setMesas);
     } catch (e) {
       setMsg(e.message || 'No se pudo tomar la mesa.');
@@ -109,7 +110,7 @@ export default function Mesero() {
     }
   }
 
-  // === Agregar producto (si tiene acomp abre modal) ===
+  // === Agregar producto: SIEMPRE abrir modal con Nota (aunque no tenga acomp) ===
   async function handleAddProduct(p) {
     const pid = await ensurePreId(preId, mesaSel?.id);
     if (!pid) { setMsg('No hay precuenta abierta para esta mesa.'); return; }
@@ -119,18 +120,15 @@ export default function Mesero() {
       list = await api(`/api/productos/${p.id}/acompanamientos`);
       acompCache.set(p.id, list);
     }
-    if (!list.length) {
-      await api(`/api/precuentas/${pid}/items`, { method: 'POST', body: { producto_id: p.id } });
-      await cargar(pid);
-    } else {
-      setSelectedProduct(p);
-      setAcomps(list);
-      setSelectedAcomps([]);
-      setShowAcomps(true);
-    }
+
+    setSelectedProduct(p);
+    setAcomps(list || []);
+    setSelectedAcomps([]);
+    setNoteText('');           // ← limpiar nota siempre
+    setShowAcomps(true);
   }
 
-  // Confirmar modal
+  // Confirmar modal (acomps + nota)
   async function confirmarAgregarItem() {
     const pid = await ensurePreId(preId, mesaSel?.id);
     if (!pid || !selectedProduct) return;
@@ -139,57 +137,57 @@ export default function Mesero() {
       method: 'POST',
       body: { producto_id: selectedProduct.id },
     });
+
+    // acompañamientos
     for (const aid of selectedAcomps) {
       await api(`/api/precuentas/${pid}/items/${r.item_id}/acompanamientos`, {
         method: 'POST', body: { acompanamiento_id: aid }
       });
     }
+
+    // NOTA (opcional)
+    const nota = (noteText || '').trim();
+    if (nota) {
+      await api(`/api/precuentas/${pid}/items/${r.item_id}/nota`, {
+        method: 'PATCH',
+        body: { nota }
+      });
+    }
+
     await cargar(pid);
     setShowAcomps(false);
   }
 
-  // === Agrupar líneas: producto + set de acomp (ids numéricos, únicos y ordenados) ===
+  // Agrupa líneas (UI) — ignoramos nota aquí a propósito (no se muestra en precuenta)
   const lineasAgrupadas = useMemo(() => {
+    const out = [];
     const map = new Map();
-
-    for (const li of (detalle.detalle || [])) {
-      const pid = Number(li.producto_id);
-
-      const acompIds = Array.isArray(li.acomps)
-        ? Array.from(new Set(
-            li.acomps.map(a => Number(a.id)).filter(n => Number.isFinite(n))
-          )).sort((a,b)=>a-b)
-        : [];
-
-      // firma estable (igual a Cajero)
-      const firma = JSON.stringify({ pid, a: acompIds });
-
+    (detalle.detalle || []).forEach((li) => {
+      const acompIds = (li.acomps || []).map((a) => a.id).sort((a, b) => a - b);
+      const firma = `${li.producto_id}#${acompIds.join(',')}`; // ← sin nota
       if (!map.has(firma)) {
         map.set(firma, {
           firma,
-          producto_id: pid,
+          producto_id: li.producto_id,
           nombre: li.nombre_producto || li.descripcion,
           precio: Number(li.precio_unitario || 0),
           acomps: (li.acomps || []).map(a => ({
-            id: Number(a.id),
-            nombre: a.nombre,
-            precio_extra: Number(a.precio_extra || 0),
+            id: a.id, nombre: a.nombre, precio_extra: Number(a.precio_extra || 0)
           })),
           cantidad: 0,
           itemIds: [],
         });
       }
-
       const g = map.get(firma);
       g.cantidad += Number(li.cantidad || 1);
       g.itemIds.push(li.item_id);
-    }
-
-    return Array.from(map.values())
-      .sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+    });
+    map.forEach((v) => out.push(v));
+    out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+    return out;
   }, [detalle]);
 
-  // +/- / eliminar (siempre asegurando preId)
+  // +/- / eliminar
   async function incLinea(g) {
     const pid = await ensurePreId(preId, mesaSel?.id);
     if (!pid) return;
@@ -239,7 +237,7 @@ export default function Mesero() {
   const totalConPropina = Number(detalle?.header?.total_con_propina ?? (subtotal + propinaMonto));
   const hayProductos = Number(detalle?.detalle?.length ?? 0) > 0;
 
-  // Imprimir (bloqueo + fallback id)
+  // Imprimir (directo)
   async function imprimirPrecuenta() {
     const pid = await ensurePreId(preId, mesaSel?.id);
     if (!pid || printing) return;
@@ -409,24 +407,43 @@ export default function Mesero() {
         <div className="sheet-backdrop" onClick={() => setShowAcomps(false)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-handle" />
-            <div className="sheet-title">Acompañamientos</div>
-            {acomps.length === 0 && <div className="muted">Este producto no tiene acompañamientos.</div>}
+            <div className="sheet-title">Acompañamientos y nota</div>
+
+            {acomps.length === 0 && (
+              <div className="muted">Este producto no tiene acompañamientos.</div>
+            )}
+
             <div className="sheet-body">
-              {acomps.map((a) => (
-                <label key={a.id} className="check">
-                  <input
-                    type="checkbox"
-                    checked={selectedAcomps.includes(a.id)}
-                    onChange={(e) => {
-                      const on = e.target.checked;
-                      setSelectedAcomps(prev => on ? [...prev, a.id] : prev.filter(x => x !== a.id));
-                    }}
-                  />
-                  <span>{a.nombre}</span>
-                  <span className="muted">{Number(a.precio_extra) > 0 ? `+${money(a.precio_extra)}` : ''}</span>
-                </label>
-              ))}
+              {acomps.length > 0 && (
+                <>
+                  <div className="muted" style={{marginBottom:4}}>Acompañamientos</div>
+                  {acomps.map((a) => (
+                    <label key={a.id} className="check">
+                      <input
+                        type="checkbox"
+                        checked={selectedAcomps.includes(a.id)}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setSelectedAcomps(prev => on ? [...prev, a.id] : prev.filter(x => x !== a.id));
+                        }}
+                      />
+                      <span>{a.nombre}</span>
+                      <span className="muted">{Number(a.precio_extra) > 0 ? `+${money(a.precio_extra)}` : ''}</span>
+                    </label>
+                  ))}
+                </>
+              )}
+
+              <div className="muted" style={{marginTop:10}}>Nota para cocina/barra (opcional)</div>
+              <textarea
+                className="input"
+                rows={3}
+                placeholder="Ej: sin mayonesa, cocción 3/4…"
+                value={noteText}
+                onChange={(e)=>setNoteText(e.target.value)}
+              />
             </div>
+
             <div className="sheet-actions">
               <button className="btn-ghost" onClick={() => setShowAcomps(false)}>Cancelar</button>
               <button className="btn-primary" onClick={confirmarAgregarItem}>Agregar</button>

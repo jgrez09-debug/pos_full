@@ -1,5 +1,5 @@
 // server/src/routes/precuentas.js
-// Rutas de PRECUENTAS (detalle, items, acompañamientos, impresión) con legibilidad optimizada
+// PRECUENTAS (detalle, items, acompañamientos, impresión) + NOTA POR ITEM (sin mostrar en precuenta)
 
 import { Router } from 'express';
 import { pool } from '../db.js';
@@ -53,9 +53,7 @@ async function recalcPrecuenta(preId) {
   return { subtotal, p, propina, total: subtotal + propina };
 }
 
-/** HTML optimizado: títulos grandes; productos/extras al tamaño anterior
- *  + AGRUPACIÓN por (producto_id + set ordenado de acompañamientos) para imprimir igual que en la UI.
- */
+/** HTML de PRECUENTA (sin notas) con AGRUPACIÓN por producto + set de acompañamientos */
 async function htmlPrecuenta(preId) {
   const { rows: Hrows } = await pool.query(
     `SELECT p.id, p.numero, p.mesa_id, p.mesero_id, p.estado,
@@ -89,7 +87,7 @@ async function htmlPrecuenta(preId) {
       ORDER BY pr.nombre`, [preId]
   );
 
-  // === AGRUPACIÓN igual a la UI (producto + set de acomp normalizado) ===
+  // Agrupar por (producto + set acomp) — SIN nota
   const map = new Map();
   for (const li of drows) {
     const acomp = Array.isArray(li.acomp) ? li.acomp : JSON.parse(li.acomp || '[]');
@@ -150,15 +148,15 @@ async function htmlPrecuenta(preId) {
     font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "lnum" 1;
     color:#000;
     width: 74mm; margin: 0; padding: 4mm;
-    font-size: 15px;        /* base (títulos y totales se ven grandes) */
+    font-size: 15px;
     line-height: 1.35;
   }
   .h { text-align:center; margin: 0 0 6px 0; }
   .t { font-size: 18px; font-weight: 800; letter-spacing: .2px; }
   .small { font-size: 12.8px; }
   .row { display:flex; justify-content:space-between; align-items:baseline; margin: 3px 0; }
-  .item { font-size: 13.5px; }       /* ← productos al tamaño anterior */
-  .sub  { padding-left: 8px; font-size: 12.5px; }  /* ← extras al tamaño anterior */
+  .item { font-size: 13.5px; }
+  .sub  { padding-left: 8px; font-size: 12.5px; }
   .name { max-width: 50mm; word-wrap: break-word; }
   .price { width: 24mm; text-align: right; }
   .price.big { font-weight: 700; }
@@ -204,7 +202,7 @@ router.get('/__impresoras', async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Header + detalle
+// Header + detalle (incluye nota por item en JSON para UI, NO en impresión)
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -218,7 +216,7 @@ router.get('/:id', async (req, res) => {
     const header = H[0];
 
     const { rows } = await pool.query(
-      `SELECT i.id AS item_id, i.producto_id, i.cantidad, i.precio_unitario,
+      `SELECT i.id AS item_id, i.producto_id, i.cantidad, i.precio_unitario, i.nota,
               pr.nombre AS nombre_producto,
               COALESCE(
                 json_agg(json_build_object('id', a.id, 'nombre', a.nombre, 'precio_extra', pia.precio_extra))
@@ -240,6 +238,7 @@ router.get('/:id', async (req, res) => {
       nombre_producto: r.nombre_producto,
       cantidad: Number(r.cantidad || 1),
       precio_unitario: Number(r.precio_unitario || 0),
+      nota: r.nota || '',
       acomps: Array.isArray(r.acomps) ? r.acomps : JSON.parse(r.acomps || '[]'),
     }));
     res.json({ header, detalle });
@@ -345,6 +344,19 @@ router.post('/:preId/items/:itemId/acompanamientos', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'No se pudo agregar el acompañamiento' });
+  }
+});
+
+// PATCH NOTA por item
+router.patch('/:preId/items/:itemId/nota', async (req, res) => {
+  const { itemId } = req.params;
+  const { nota } = req.body || {};
+  try {
+    await pool.query(`UPDATE precuenta_items SET nota = $2 WHERE id = $1`, [itemId, (nota || '').trim() || null]);
+    res.json({ ok:true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'No se pudo actualizar la nota del item' });
   }
 });
 
