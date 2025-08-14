@@ -22,6 +22,13 @@ const isLocked  = (id) => (locks.get(id) || 0) > Date.now();
 const lockNow   = (id) => locks.set(id, Date.now() + LOCK_MS);
 const unlock    = (id) => locks.delete(id);
 
+// >>> Whitelist de sectores que SÍ se guardan en KDS (impresión no se toca)
+const KDS_SECTORES_INCLUDE = (process.env.KDS_SECTORES_INCLUDE || 'COCINA1,COCINA2')
+  .split(',')
+  .map(s => s.trim().toUpperCase())
+  .filter(Boolean);
+const KDS_INCLUDE_SET = new Set(KDS_SECTORES_INCLUDE);
+
 // Normalizadores seguros
 const str = (v) => (v == null ? '' : String(v));
 const num = (v, d = 0) => {
@@ -281,24 +288,32 @@ async function printHtmlTo(printerName, html, label = 'comanda') {
  * Guarda tickets KDS por SECTOR a partir de filas CRUDAS (1 por ítem)
  * - Ticket: estado 'pendiente', incluye mesero y mesa_numero
  * - Items: unitarizados (cantidad=1 repetida 'veces'), estado 'pendiente'
+ * - **Filtra** por KDS_SECTORES_INCLUDE (ej. excluye BARRA si no está en la lista)
  */
 async function saveKDS(header, rowsCrudas) {
   // Agrupar filas crudas por sector
   const porSector = new Map();
   for (const r of rowsCrudas) {
-    const sector = (r.sector_nombre || '').trim() || 'SIN_SECTOR';
-    if (!porSector.has(sector)) porSector.set(sector, []);
-    porSector.get(sector).push(r);
+    const sectorRaw = (r.sector_nombre || '').trim() || 'SIN_SECTOR';
+    if (!porSector.has(sectorRaw)) porSector.set(sectorRaw, []);
+    porSector.get(sectorRaw).push(r);
   }
 
-  for (const [sector, lista] of porSector.entries()) {
+  for (const [sectorRaw, lista] of porSector.entries()) {
     if (!lista.length) continue;
+
+    // Gate para KDS: solo guardar si el sector está permitido
+    const sectorKey = sectorRaw.toUpperCase();
+    if (!KDS_INCLUDE_SET.has(sectorKey)) {
+      // omitimos guardar en KDS para este sector (pero sí se imprimirá más abajo)
+      continue;
+    }
 
     const { rows: T } = await pool.query(
       `INSERT INTO kds_tickets (precuenta_id, mesa_numero, sector, estado, mesero_nombre, creado_en, actualizado_en)
        VALUES ($1,$2,$3,'pendiente',$4, now(), now())
        RETURNING id`,
-      [ header.id, header.mesa_numero, sector, header.mesero_nombre || '' ]
+      [ header.id, header.mesa_numero, sectorRaw, header.mesero_nombre || '' ]
     );
     const ticketId = T[0].id;
 
@@ -327,6 +342,7 @@ async function saveKDS(header, rowsCrudas) {
  * body: { precuenta_id }
  * - Agrupa por sector y por “firma” (producto + acomp-set + nota) para imprimir
  * - Guarda tickets en KDS por sector (mesa_numero garantizado) con filas crudas
+ *   **solo** para sectores incluidos en KDS_SECTORES_INCLUDE
  */
 router.post('/emitir', async (req, res) => {
   const preId = req.body?.precuenta_id;
@@ -350,7 +366,7 @@ router.post('/emitir', async (req, res) => {
     const rowsCrudas = await getDetalleCrudoPorSector(preId);
     const groupedBySector = buildGroupsBySector(rowsCrudas);
 
-    // Guardar en KDS usando filas CRUDAS
+    // Guardar en KDS usando filas CRUDAS (con whitelist)
     try {
       await saveKDS(header, rowsCrudas);
     } catch (ek) {
@@ -358,7 +374,7 @@ router.post('/emitir', async (req, res) => {
       errores.push({ kds: true, error: ek.message });
     }
 
-    // Por cada sector con grupos, resolver impresora y enviar
+    // Por cada sector con grupos, resolver impresora y enviar (no filtramos impresión)
     for (const [sector, groups] of groupedBySector.entries()) {
       if (!groups.length) continue;
 

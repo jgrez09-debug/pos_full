@@ -1,3 +1,4 @@
+// server/src/routes/kds.js
 // KDS: listar y actualizar estado de tickets e ítems (por-ítem)
 import { Router } from 'express';
 import { pool } from '../db.js';
@@ -20,6 +21,7 @@ function mapTicket(r) {
   return {
     id: Number(r.id),
     precuenta_id: r.precuenta_id,
+    pre_numero: r.pre_numero != null ? Number(r.pre_numero) : null, // ← agregado
     mesa_numero: Number(r.mesa_numero),
     sector: r.sector,
     estado: r.estado, // pendiente | preparando | listo (del ticket general)
@@ -37,6 +39,7 @@ router.get('/ping', (_req, res) => res.json({ ok: true, now: new Date().toISOStr
 /**
  * GET /api/kds
  * Devuelve tickets abiertos con sus ítems (cada ítem puede tener su propio estado).
+ * Ahora incluye `pre_numero` (número de la precuenta) vía subconsulta segura.
  */
 router.get('/', async (_req, res) => {
   try {
@@ -44,6 +47,7 @@ router.get('/', async (_req, res) => {
       SELECT
         t.id,
         t.precuenta_id,
+        (SELECT numero FROM precuentas p WHERE p.id = t.precuenta_id) AS pre_numero,  -- ← agregado
         t.mesa_numero,
         t.sector,
         t.estado,
