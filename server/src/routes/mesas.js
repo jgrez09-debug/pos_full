@@ -8,53 +8,81 @@ const router = Router();
 router.get('/', async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, numero, estado FROM mesas ORDER BY numero`
+      `SELECT id, numero, estado, mesero_id
+         FROM mesas
+        ORDER BY numero`
     );
     res.json(rows);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-/** Seleccionar/abrir precuenta (usado por Mesero) */
+/**
+ * Seleccionar/abrir precuenta (Mesero)
+ * - Reutiliza precuenta existente en estado 'abierta' o 'enviada'
+ * - Si no hay, toma la mesa (si estaba libre o ya ocupada por el mismo mesero)
+ *   y crea una precuenta nueva.
+ * - Evita que cambie el número/folio mientras la precuenta siga abierta.
+ */
 router.post('/:id/seleccionar', async (req, res) => {
   const { id } = req.params;
-  const { mesero_id } = req.body;
+  const { mesero_id } = req.body || {};
+
+  if (!mesero_id) return res.status(400).json({ error: 'mesero_id requerido' });
 
   try {
-    // 1) Si hay precuenta abierta/enviada para esa mesa, reusar (comportamiento actual)
-    const { rows: ex } = await pool.query(
-      `SELECT id FROM precuentas
-        WHERE mesa_id=$1 AND estado IN ('abierta','enviada')
-        ORDER BY creado_en DESC LIMIT 1`,
+    // 0) Verificar mesa existe
+    const { rows: mrows } = await pool.query(
+      `SELECT id, estado, mesero_id FROM mesas WHERE id=$1 LIMIT 1`,
       [id]
     );
+    if (!mrows.length) return res.status(404).json({ error: 'Mesa no existe' });
+
+    // 1) Si hay precuenta activa, reutilizar SIEMPRE (mantiene folio estable)
+    const { rows: ex } = await pool.query(
+      `SELECT id
+         FROM precuentas
+        WHERE mesa_id=$1
+          AND estado IN ('abierta','enviada')
+        ORDER BY creado_en DESC
+        LIMIT 1`,
+      [id]
+    );
+
     if (ex.length) {
-      // asegurar mesa 'ocupada' por consistencia (idempotente)
+      // Asegurar coherencia de la mesa
       await pool.query(
-        `UPDATE mesas SET estado='ocupada', mesero_id=COALESCE(mesero_id,$2) WHERE id=$1`,
+        `UPDATE mesas
+            SET estado='ocupada',
+                mesero_id = COALESCE(mesero_id, $2)
+          WHERE id=$1`,
         [id, mesero_id]
       );
       return res.json({ precuenta_id: ex[0].id });
     }
 
-    // 2) No hay precuenta activa: intentar tomar la mesa de forma atómica.
-    //    Solo pasa a 'ocupada' si estaba 'libre'. Evita la carrera entre meseros.
+    // 2) No hay precuenta activa: tomar la mesa.
+    //    Permitimos tomar si estaba 'libre' o si ya estaba 'ocupada' por este mismo mesero.
     const claim = await pool.query(
       `UPDATE mesas
           SET estado='ocupada', mesero_id=$2
-        WHERE id=$1 AND estado='libre'
+        WHERE id=$1
+          AND (estado='libre' OR (estado='ocupada' AND mesero_id=$2))
         RETURNING id`,
       [id, mesero_id]
     );
 
     if (claim.rowCount === 0) {
-      // Otro mesero la tomó entre el paso (1) y (2)
+      // Ocupada por otro mesero
       return res.status(409).json({ error: 'La mesa ya fue tomada por otro mesero.' });
     }
 
     // 3) Crear precuenta nueva
     const { rows: ins } = await pool.query(
       `INSERT INTO precuentas (mesa_id, mesero_id, estado)
-       VALUES ($1,$2,'abierta') RETURNING id`,
+       VALUES ($1,$2,'abierta')
+       RETURNING id`,
       [id, mesero_id]
     );
 
@@ -64,14 +92,15 @@ router.post('/:id/seleccionar', async (req, res) => {
   }
 });
 
-/** 🔹 Obtener la precuenta actual de una mesa (para Cajero) */
+/** Obtener la precuenta actual de una mesa (para Cajero o reintentos UI) */
 router.get('/:id/precuenta', async (req, res) => {
   const { id } = req.params;
   try {
     const { rows } = await pool.query(
       `SELECT id
          FROM precuentas
-        WHERE mesa_id=$1 AND estado IN ('abierta','enviada')
+        WHERE mesa_id=$1
+          AND estado IN ('abierta','enviada')
         ORDER BY creado_en DESC
         LIMIT 1`,
       [id]

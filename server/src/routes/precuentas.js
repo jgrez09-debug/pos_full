@@ -1,5 +1,5 @@
 // server/src/routes/precuentas.js
-// PRECUENTAS (detalle, items, acompañamientos, impresión) + NOTA POR ITEM (sin mostrar en precuenta)
+// Rutas de PRECUENTAS (detalle, items, acompañamientos, impresión)
 
 import { Router } from 'express';
 import { pool } from '../db.js';
@@ -53,7 +53,7 @@ async function recalcPrecuenta(preId) {
   return { subtotal, p, propina, total: subtotal + propina };
 }
 
-/** HTML de PRECUENTA (sin notas) con AGRUPACIÓN por producto + set de acompañamientos */
+/** HTML de precuenta (sin notas) */
 async function htmlPrecuenta(preId) {
   const { rows: Hrows } = await pool.query(
     `SELECT p.id, p.numero, p.mesa_id, p.mesero_id, p.estado,
@@ -87,18 +87,15 @@ async function htmlPrecuenta(preId) {
       ORDER BY pr.nombre`, [preId]
   );
 
-  // Agrupar por (producto + set acomp) — SIN nota
+  // AGRUPACIÓN (producto + set acomp). NOTA no se usa en la precuenta.
   const map = new Map();
   for (const li of drows) {
     const acomp = Array.isArray(li.acomp) ? li.acomp : JSON.parse(li.acomp || '[]');
     const pid = Number(li.producto_id);
-
     const acompIds = Array.from(new Set(
       acomp.map(a => Number(a.id)).filter(n => Number.isFinite(n))
     )).sort((a,b)=>a-b);
-
     const firma = JSON.stringify({ pid, a: acompIds });
-
     if (!map.has(firma)) {
       map.set(firma, {
         producto_id: pid,
@@ -202,7 +199,7 @@ router.get('/__impresoras', async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Header + detalle (incluye nota por item en JSON para UI, NO en impresión)
+// Header + detalle
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -232,7 +229,9 @@ router.get('/:id', async (req, res) => {
         ORDER BY pr.nombre`, [id]
     );
 
-    const detalle = rows.map(r => ({
+    const detalle = rows.map(r => ([
+      'item_id','producto_id','nombre_producto','cantidad','precio_unitario','nota'
+    ].reduce((o,k)=>o,{
       item_id: r.item_id,
       producto_id: r.producto_id,
       nombre_producto: r.nombre_producto,
@@ -240,7 +239,7 @@ router.get('/:id', async (req, res) => {
       precio_unitario: Number(r.precio_unitario || 0),
       nota: r.nota || '',
       acomps: Array.isArray(r.acomps) ? r.acomps : JSON.parse(r.acomps || '[]'),
-    }));
+    })));
     res.json({ header, detalle });
   } catch (e) {
     console.error(e);
@@ -347,16 +346,16 @@ router.post('/:preId/items/:itemId/acompanamientos', async (req, res) => {
   }
 });
 
-// PATCH NOTA por item
+// **Guardar nota**
 router.patch('/:preId/items/:itemId/nota', async (req, res) => {
   const { itemId } = req.params;
-  const { nota } = req.body || {};
+  const nota = (req.body?.nota || '').trim();
   try {
-    await pool.query(`UPDATE precuenta_items SET nota = $2 WHERE id = $1`, [itemId, (nota || '').trim() || null]);
-    res.json({ ok:true });
+    await pool.query(`UPDATE precuenta_items SET nota=$2 WHERE id=$1`, [itemId, nota]);
+    res.json({ ok: true });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'No se pudo actualizar la nota del item' });
+    res.status(500).json({ error: 'No se pudo actualizar la nota' });
   }
 });
 

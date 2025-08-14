@@ -104,3 +104,246 @@ body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui
 .flex1 { flex: 1; }
 .minw-90 { min-width: 90px; }
 .text-right { text-align: right; }
+
+
+/* ==== Nota (chips) – alto contraste, touch-friendly ==== */
+.sheet .sheet-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* cubrimos dos nombres posibles: .note-pill y .pill  */
+.sheet .sheet-body .note-pill,
+.sheet .sheet-body .pill {
+  background: #0f172a !important;     /* slate-900 */
+  color: #e2e8f0 !important;          /* slate-200 */
+  border: 2px solid #475569 !important;/* slate-600 */
+  border-radius: 9999px !important;
+  padding: 10px 14px !important;
+  line-height: 1 !important;
+  font-weight: 600 !important;
+  font-size: 15px !important;
+  min-height: 40px !important;        /* mejor área táctil */
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 1px 0 rgba(0,0,0,.25);
+}
+
+.sheet .sheet-body .note-pill.on,
+.sheet .sheet-body .pill.on,
+.sheet .sheet-body .note-pill[aria-pressed="true"],
+.sheet .sheet-body .pill[aria-pressed="true"] {
+  background: #22c55e !important;     /* green-500 */
+  border-color: #16a34a !important;   /* green-600 */
+  color: #052e16 !important;          /* green-950 */
+  box-shadow: 0 0 0 3px rgba(34,197,94,.35);
+}
+
+.sheet .sheet-body .note-pill:hover,
+.sheet .sheet-body .pill:hover {
+  filter: brightness(1.1);
+}
+
+.sheet .sheet-body .note-pill:active,
+.sheet .sheet-body .pill:active {
+  transform: translateY(1px);
+}
+
+.sheet .sheet-title {
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+
+/* === KDS === */
+/* === KDS === */
+
+/* Variables base */
+:root{
+  --kds-gap: 16px;
+  --kds-card-w: 360px;
+  --kds-radius: 14px;
+
+  /* tema oscuro (default) */
+  --kds-bg: #0d0f12;
+  --kds-card: #181b20;
+  --kds-border: #272b33;
+  --kds-text: #e6e9ef;
+  --kds-muted: #9aa3b2;
+  --kds-green: #22c55e;
+  --kds-yellow: #f59e0b;
+  --kds-red: #ef4444;
+}
+
+/* Tema claro (colores recomendados para día) */
+.kds-root.light{
+  --kds-bg: #f5f7fb;
+  --kds-card: #ffffff;
+  --kds-border: #e4e7ee;
+  --kds-text: #111827;
+  --kds-muted: #6b7280;
+  --kds-green: #16a34a;  /* verde accesible */
+  --kds-yellow: #d97706; /* ámbar */
+  --kds-red: #dc2626;    /* rojo */
+}
+
+/* Contenedor principal ocupa toda la pantalla */
+.kds-root{
+  padding: 16px;
+  color: var(--kds-text);
+  max-width: none;
+  margin: 0;
+  background: var(--kds-bg);
+  min-height: 100vh;
+}
+
+.kds-topbar{ display:flex; align-items:center; gap:16px; margin-bottom: 12px; }
+.kds-title{ font-size: 26px; font-weight: 800; letter-spacing:.2px; }
+.kds-sub{ color: var(--kds-muted); margin-right:auto; }
+
+.kds-actions{ display:flex; align-items:center; gap:10px; }
+.kds-link{ background:none; border:none; color:#3dd68c; cursor:pointer; }
+.kds-link:hover{ text-decoration: underline; }
+
+.kds-pager{ display:flex; align-items:center; gap:8px; }
+.kds-nav{ width:36px; height:36px; border-radius: 10px; border:1px solid var(--kds-border); background: var(--kds-card); color:var(--kds-text); cursor:pointer;}
+.kds-pagechip{ font-weight:700; }
+
+/* Grid 5 columnas; filas auto (tarjeta crece según contenido) */
+.kds-grid{
+  display:grid;
+  grid-template-columns: repeat(5, var(--kds-card-w));
+  grid-auto-rows: auto;
+  gap: var(--kds-gap);
+  justify-content: start;
+  padding-top: 6px;
+}
+
+/* Tarjeta sin altura fija ni scroll interno */
+.kds-card{
+  width: var(--kds-card-w);
+  border: 2px solid var(--kds-border);
+  background: var(--kds-card);
+  border-radius: var(--kds-radius);
+  display:flex; flex-direction: column;
+  box-shadow: 0 4px 14px rgba(0,0,0,.15);
+}
+
+/* Borde superior por edad/estado */
+.kds-age-green{ box-shadow: inset 0 4px 0 var(--kds-green); }
+.kds-age-yellow{ box-shadow: inset 0 4px 0 var(--kds-yellow); }
+.kds-age-red{ box-shadow: inset 0 4px 0 var(--kds-red); }
+
+.kds-card-h{
+  display:flex; align-items:center; gap:10px;
+  padding: 10px 12px 6px 12px;
+}
+.kds-card-h-left{ display:flex; flex-direction: column; gap:2px; }
+.kds-mesa{ font-weight: 800; font-size: 18px; }
+.kds-meta{ display:flex; gap:8px; color: var(--kds-muted); font-size: 12.5px; }
+.kds-timer{
+  margin-left:auto; font-weight:800; letter-spacing:.4px; font-variant-numeric: tabular-nums;
+  padding: 3px 8px; border-radius: 999px; border:1px solid var(--kds-border); background:color-mix(in srgb, var(--kds-card) 90%, black 10%);
+}
+
+.kds-items{
+  padding: 0 12px; margin-top: 6px;
+  overflow: visible; /* sin scroll interno */
+}
+.kds-item{ padding: 6px 0; border-bottom: 1px dashed var(--kds-border); }
+.kds-item:last-child{ border-bottom: none; }
+
+.kds-item-line{ display:flex; gap:8px; align-items:flex-start; }
+.kds-dot{ width:8px; height:8px; border-radius:50%; background: var(--kds-muted); margin-top:6px; }
+
+.kds-item-pendiente .kds-dot{ background:#8aa0b8; }
+.kds-item-preparacion .kds-dot,
+.kds-item-preparando .kds-dot{ background: var(--kds-yellow); }
+.kds-item-listo .kds-dot{ background: var(--kds-green); }
+
+.kds-item-name{ line-height:1.15; }
+.kds-item-name strong{ font-size:14.5px; }
+.kds-note{ font-size:12.5px; font-style: italic; opacity:.95; margin-top:2px; }
+.kds-acomp{ font-size: 12.8px; color: var(--kds-muted); margin-left: 16px; margin-top: 2px; }
+
+.kds-acciones{ display:flex; gap:8px; margin-top:6px; }
+.kds-btn{
+  font-size: 12.5px; padding: 3px 8px; border-radius: 999px; border:1px solid var(--kds-border);
+  background:color-mix(in srgb, var(--kds-card) 90%, black 10%); color:var(--kds-text); cursor:pointer;
+}
+.kds-btn:disabled{ opacity:.45; cursor:not-allowed; }
+.kds-btn-ghost{ background: transparent; }
+
+.kds-card-f{
+  margin-top:auto; display:flex; align-items:center; gap:8px;
+  padding: 8px 12px 10px 12px; border-top: 1px dashed var(--kds-border);
+}
+.kds-chip{
+  font-size: 12px; padding: 3px 8px; border-radius: 8px; background:color-mix(in srgb, var(--kds-card) 90%, black 10%); border:1px solid var(--kds-border);
+}
+.kds-spacer{ flex: 1; }
+.kds-pill{
+  padding: 6px 10px; border-radius: 999px; border:1px solid var(--kds-border);
+  background:color-mix(in srgb, var(--kds-card) 90%, black 10%); color:var(--kds-text); cursor:pointer; font-weight:700; font-size: 12.5px;
+}
+.kds-pill:hover{ filter: brightness(1.07); }
+
+.kds-debug{
+  margin-top: 14px; padding: 12px; background:color-mix(in srgb, var(--kds-card) 92%, black 8%); border:1px solid var(--kds-border);
+  border-radius: 10px; color:var(--kds-text); max-height: 45vh; overflow:auto;
+  font-size: 12.5px;
+}
+
+
+/* ---------- Ítems como tarjetas (forma) ---------- */
+
+/* Quitamos el separador antiguo de la lista interna */
+.kds-items .kds-item{ padding: 0; border-bottom: none; }
+
+/* Nueva tarjeta por ítem */
+.kds-itemcard{
+  border: 2px solid var(--kds-border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  background: color-mix(in srgb, var(--kds-card) 92%, black 8%);
+  box-shadow: 0 2px 6px rgba(0,0,0,.12);
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+
+/* Estado: pendiente / preparando / listo (bien distinguibles) */
+.kds-itemcard.pendiente{
+  border-color: #55606d;
+  background: color-mix(in srgb, var(--kds-card) 96%, white 4%);
+}
+.kds-itemcard.preparando{
+  border-color: var(--kds-yellow);
+  background: color-mix(in srgb, var(--kds-yellow) 10%, var(--kds-card) 90%);
+}
+.kds-itemcard.listo{
+  border-color: var(--kds-green);
+  background: color-mix(in srgb, var(--kds-green) 18%, var(--kds-card) 82%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--kds-green) 40%, transparent);
+}
+
+/* Línea superior dentro de la tarjeta */
+.kds-item-line{ display:flex; gap:10px; align-items:flex-start; }
+
+/* Punto de estado adaptado por tarjeta */
+.kds-itemcard.pendiente .kds-dot{ background:#8aa0b8; }
+.kds-itemcard.preparando .kds-dot{ background: var(--kds-yellow); }
+.kds-itemcard.listo .kds-dot{ background: var(--kds-green); }
+
+.kds-item-name strong{ font-size:14.5px; }
+.kds-note{ font-size:12.5px; font-style: italic; opacity:.95; margin-top:2px; }
+.kds-acomp{ font-size: 12.8px; color: var(--kds-muted); margin-left: 18px; margin-top: 4px; }
+
+/* Acciones dentro de la tarjeta */
+.kds-acciones{ display:flex; gap:8px; margin-left: 8px; }
+.kds-btn{
+  font-size: 12.5px; padding: 4px 10px; border-radius: 999px; border:1px solid var(--kds-border);
+  background: color-mix(in srgb, var(--kds-card) 90%, black 10%); color: var(--kds-text); cursor:pointer;
+}
+.kds-btn-ghost{ background: transparent; }
+.kds-btn:hover{ filter: brightness(1.08); }
